@@ -1,16 +1,130 @@
 {
-  "inputs": ["uv.lock", "pyproject.toml", "Makefile", "pyrightconfig.json", ".github/scripts/**", ".github/workflows/bench-engine.yml"],
-  "env": ["OPENAI_API_KEY", "UV_FROZEN", "UV_PYTHON_PREFERENCE"],
-  "suites": [],
+  "inputs": [
+    "uv.lock",
+    "pyproject.toml",
+    "Makefile",
+    "pyrightconfig.json",
+    ".github/scripts/**",
+    ".github/workflows/bench-engine.yml"
+  ],
+  "env": [
+    "OPENAI_API_KEY",
+    "UV_FROZEN",
+    "UV_PYTHON_PREFERENCE"
+  ],
+  "suites": [
+    {
+      "name": "tests-3.14",
+      "adapter": "pytest",
+      "dir": ".",
+      "tests": [
+        "tests/**/test_*.py",
+        "tests/**/*_test.py"
+      ],
+      "run": [
+        "uv",
+        "run",
+        "coverage",
+        "run",
+        "-p",
+        "-m",
+        "pytest",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "!**/*.md"
+      ],
+      "sources": [
+        "declared"
+      ],
+      "defaultMs": 2000,
+      "exclude": [
+        "tests/test_trace_processor.py",
+        "tests/extensions/memory/test_redis_session.py"
+      ]
+    }
+  ],
   "trustedRef": "refs/heads/bench/engine",
   "commands": [
-    { "name": "lint", "run": "make format-check && make lint", "inputs": ["src/**", "tests/**", "examples/**", "integration_tests/**", "!**/*.md"] },
-    { "name": "typecheck", "run": "make typecheck", "inputs": ["src/**", "tests/**", "examples/**", "integration_tests/**", "!**/*.md"] },
-    { "name": "tests-3.10", "run": "make tests && make tests-asyncio-stability (python 3.10)", "inputs": ["src/**", "tests/**", "!**/*.md"] },
-    { "name": "tests-3.11", "run": "make tests (python 3.11)", "inputs": ["src/**", "tests/**", "!**/*.md"] },
-    { "name": "tests-3.12", "run": "make tests (python 3.12)", "inputs": ["src/**", "tests/**", "!**/*.md"] },
-    { "name": "tests-3.13", "run": "make tests (python 3.13)", "inputs": ["src/**", "tests/**", "!**/*.md"] },
-    { "name": "tests-3.14", "run": "make coverage, realtime demo in Chromium, tests-asyncio-stability (python 3.14)", "inputs": ["src/**", "tests/**", "examples/realtime/**", "!**/*.md"] },
-    { "name": "native-macos-sandbox", "run": "uv run pytest -m requires_native_macos_sandbox", "inputs": ["src/**", "tests/**", "!**/*.md"] }
+    {
+      "name": "lint",
+      "run": "make format-check && make lint",
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "examples/**",
+        "integration_tests/**",
+        "!**/*.md"
+      ]
+    },
+    {
+      "name": "typecheck",
+      "run": "make typecheck",
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "examples/**",
+        "integration_tests/**",
+        "!**/*.md"
+      ]
+    },
+    {
+      "name": "tests-3.10",
+      "run": "make tests && make tests-asyncio-stability (python 3.10)",
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "!**/*.md"
+      ]
+    },
+    {
+      "name": "tests-3.11",
+      "run": "make tests (python 3.11)",
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "!**/*.md"
+      ]
+    },
+    {
+      "name": "tests-3.12",
+      "run": "make tests (python 3.12)",
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "!**/*.md"
+      ]
+    },
+    {
+      "name": "tests-3.13",
+      "run": "make tests (python 3.13)",
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "!**/*.md"
+      ]
+    },
+    {
+      "name": "native-macos-sandbox",
+      "run": "uv run pytest -m requires_native_macos_sandbox",
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "!**/*.md"
+      ]
+    },
+    {
+      "name": "tests-3.14-extra",
+      "run": "serial tests (coverage), realtime demo in Chromium, tests-asyncio-stability (python 3.14)",
+      "inputs": [
+        "src/**",
+        "tests/**",
+        "examples/realtime/**",
+        "!**/*.md"
+      ]
+    }
   ]
 }

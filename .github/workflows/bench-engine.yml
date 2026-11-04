@@ -2,6 +2,7 @@ name: Bench engine
 # ARK-81 bench, engine variant: bench-tests.yml (outrun as is) with each job a command unit of outrun.json:
 # it looks itself up first and replays a pass recorded for the same inputs, toolchain and machine.
 # Base: upstream tests.yml, runs-on swapped to outrun-linux-arm64 (ARM64) and outrun-macos.
+# v2 (ARK-81): tests 3.14 is outrun's pytest suite in 2 shards plus a coverage job (below).
 # Kept: lint, typecheck, tests (3.10-3.14), native-macos-sandbox (8 jobs). Dropped: Windows jobs
 # (tests-windows, packaged-contract-windows) and, to stay near 8 jobs, mypy-win32, containers,
 # mcp-v1-compat, prospective-release-contract, packaged-contract-310/314, build-docs.
@@ -126,8 +127,7 @@ jobs:
 
   tests:
     runs-on: outrun-linux-arm64
-    # Python 3.14 also runs coverage and installs Chromium with system dependencies.
-    timeout-minutes: ${{ matrix.python-version == '3.14' && 30 || 10 }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -136,7 +136,6 @@ jobs:
           - "3.11"
           - "3.12"
           - "3.13"
-          - "3.14"
     env:
       OPENAI_API_KEY: fake-for-tests
     steps:
@@ -186,6 +185,120 @@ jobs:
       - name: Record tests
         if: steps.changes.outputs.run == 'true' && steps.look.outputs.run == 'true'
         run: .github/outrun/run record tests-${{ matrix.python-version }} --key "${{ steps.look.outputs.key }}" --since ${{ steps.start.outputs.at }}
+
+  # outrun engine (ARK-81, v2): Python 3.14's coverage run, serial upstream (258 s), split by test file into
+  # outrun's pytest suite `tests-3.14` (outrun.json): each shard replays the files whose verdict is cached
+  # and runs its share of the rest in parallel batches (`coverage run -p`, one process per batch);
+  # `coverage` then combines the data and holds upstream's --fail-under=85. The 2 files with serial
+  # tests, the realtime demo and the asyncio stability runs are the command unit tests-3.14-extra.
+  tests-314:
+    name: tests (3.14, ${{ matrix.shard }}/2)
+    runs-on: outrun-linux-arm64
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      OPENAI_API_KEY: fake-for-tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Start
+        id: start
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Setup Bun (outrun)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # Before the lookup: the pytest suite's toolchain is the python3 on PATH (uv's 3.14 venv).
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # setup-uv v9.0.0; uv 0.11.14
+        with:
+          version: "0.11.14"
+          enable-cache: true
+          prune-cache: true
+          python-version: "3.14"
+      - name: Look up what to run
+        id: look
+        run: |
+          .github/outrun/run test --dry-run --shard ${{ matrix.shard }}/2 2>&1 | tee "$RUNNER_TEMP/dry.txt"
+          if grep -q "this runner (${{ matrix.shard }}/2): 0 misses and 0 audits" "$RUNNER_TEMP/dry.txt"; then echo "tests=false" >> "$GITHUB_OUTPUT"; else echo "tests=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "${{ matrix.shard }}" = 1 ]; then .github/outrun/run lookup tests-3.14-extra; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Install dependencies
+        if: steps.look.outputs.tests == 'true' || steps.look.outputs.run == 'true'
+        run: make sync
+      - name: Run tests with coverage (outrun, by test file)
+        if: steps.look.outputs.tests == 'true'
+        run: .github/outrun/run test --shard ${{ matrix.shard }}/2 --summary "$RUNNER_TEMP/outrun-summary.json"
+      - name: Run serial tests with coverage
+        if: steps.look.outputs.run == 'true'
+        run: uv run coverage run -p -m pytest tests/test_trace_processor.py tests/extensions/memory/test_redis_session.py
+      - name: Test realtime demo in Chromium
+        if: steps.look.outputs.run == 'true'
+        run: |
+          uv run playwright install --with-deps chromium
+          uv run pytest -o pythonpath=. examples/realtime/app/test_frontend.py
+      - name: Run async teardown stability tests
+        if: steps.look.outputs.run == 'true'
+        run: make tests-asyncio-stability
+      - name: Record tests-3.14-extra
+        if: steps.look.outputs.run == 'true'
+        run: .github/outrun/run record tests-3.14-extra --key "${{ steps.look.outputs.key }}" --since ${{ steps.start.outputs.at }}
+      - name: Keep coverage data
+        if: steps.look.outputs.tests == 'true' || steps.look.outputs.run == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/cov"
+          cp .coverage.* "$RUNNER_TEMP/cov/" 2>/dev/null || true
+          [ -f "$RUNNER_TEMP/outrun-summary.json" ] && cp "$RUNNER_TEMP/outrun-summary.json" "$RUNNER_TEMP/cov/summary-${{ matrix.shard }}.json" || true
+          echo "${{ steps.look.outputs.run }}" > "$RUNNER_TEMP/cov/extra-${{ matrix.shard }}.txt"
+      - name: Upload coverage data
+        if: steps.look.outputs.tests == 'true' || steps.look.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: ${{ runner.temp }}/cov
+          include-hidden-files: true
+          retention-days: 1
+
+  coverage:
+    needs: tests-314
+    runs-on: outrun-linux-arm64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+          path: cov
+      - name: Decide
+        id: decide
+        run: |
+          ls -a cov 2>/dev/null || true
+          # The threshold holds only when every test ran here: a replayed file's coverage was checked by the
+          # run that recorded its verdict (the suite's keys hold all of src/ and tests/).
+          replayed=$(cat cov/summary-*.json 2>/dev/null | python3 -c 'import json,sys; print(sum(json.loads(l)["replayed"] for l in sys.stdin if l.strip()))' || echo 0)
+          n=$(ls cov/summary-*.json 2>/dev/null | wc -l)
+          if [ "$n" = 2 ] && [ "$replayed" = 0 ] && grep -q true cov/extra-1.txt 2>/dev/null; then echo "check=true" >> "$GITHUB_OUTPUT"; else echo "check=false" >> "$GITHUB_OUTPUT"; echo "coverage not measured in full here (summaries $n, replayed $replayed): skipped"; fi
+      - name: Setup uv
+        if: steps.decide.outputs.check == 'true'
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # setup-uv v9.0.0; uv 0.11.14
+        with:
+          version: "0.11.14"
+          enable-cache: true
+          python-version: "3.14"
+      - name: Combine and check coverage
+        if: steps.decide.outputs.check == 'true'
+        run: |
+          cp cov/.coverage.* .
+          # The version uv.lock pins; the report needs only the sources and pyproject.toml, not the project's dependencies.
+          cov="uvx --python 3.14 coverage==7.16.1"
+          $cov combine
+          $cov xml -o coverage.xml
+          $cov report -m --fail-under=85
 
   native-macos-sandbox:
     runs-on: outrun-macos
